@@ -44,8 +44,25 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+const GOOGLE_SITE_VERIFICATION = "jsKpefT8kjpoUTlWBCdHbTc6i1YcTSGq2LqugU10Ais";
+
+function googleVerificationFileResponse(request: Request): Response | null {
+  const { pathname } = new URL(request.url);
+  if (!/^\/google[\w-]+\.html$/i.test(pathname)) return null;
+  return new Response(`google-site-verification: ${GOOGLE_SITE_VERIFICATION}\n`, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "public, max-age=0, must-revalidate",
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
+    const verificationFile = googleVerificationFileResponse(request);
+    if (verificationFile) return verificationFile;
+
     try {
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
