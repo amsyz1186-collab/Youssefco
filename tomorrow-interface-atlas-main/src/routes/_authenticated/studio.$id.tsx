@@ -13,7 +13,7 @@ import { StudioIcon } from "@/components/StudioIcon";
 import { VideoFallbackPreview } from "@/components/VideoFallbackPreview";
 import { supabase } from "@/integrations/supabase/client";
 import { completeAutoVideoEdit, publishAppWebsite, runStudio } from "@/lib/ai.functions";
-import { parseAutoVideoEditPlan } from "@/lib/auto-video-edit";
+import { MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS, parseAutoVideoEditPlan } from "@/lib/auto-video-edit";
 import { getKlingVideoQuota, pollKlingVideo, startKlingVideo } from "@/lib/kling-video.functions";
 import { pick, useLang } from "@/lib/i18n";
 import { getStudioCreditCost, METERED, STUDIOS, type StudioId } from "@/lib/plans";
@@ -99,6 +99,51 @@ const VOICE_DIALECTS: Record<string, [string, string][]> = {
   ],
 };
 type VideoKeyframe = { timeSeconds: number; imageData: string };
+
+const AUTO_VIDEO_EDIT_SUGGESTIONS = [
+  {
+    label: ["قصّ سريع", "Fast highlights"],
+    prompt: [
+      "حوّل الفيديو إلى مونتاج سريع من أفضل اللحظات فقط. احذف التوقفات والتكرار، واستخدم قصّات إيقاعية وانتقالات واضحة وتكبيراً خفيفاً عند أهم لحظة. احتفظ بالصوت الأصلي وأضف موسيقى أكشن ومؤثرات انتقال مناسبة.",
+      "Create a fast-paced highlight edit from the strongest moments only. Remove pauses and repetition, use rhythmic cuts and visible transitions, and add a subtle punch-in on key moments. Preserve the original audio and add energetic music and transition effects.",
+    ],
+  },
+  {
+    label: ["أسلوب سينمائي", "Cinematic look"],
+    prompt: [
+      "اصنع مونتاجاً سينمائياً هادئاً: اختر اللقطات المهمة، وتدرجاً لونياً سينمائياً دافئاً، وحركة تقريب ناعمة، وانتقالات تلاشي سلسة. حافظ على الصوت الأصلي وأضف موسيقى سينمائية هادئة ومؤثرات خفيفة عند الانتقال.",
+      "Create a cinematic edit: keep the meaningful shots, apply a warm cinematic grade, add gentle camera push-ins and smooth dissolve transitions. Preserve the original audio and mix in calm cinematic music with subtle transition sounds.",
+    ],
+  },
+  {
+    label: ["فيديو عمودي للسوشيال", "Vertical social video"],
+    prompt: [
+      "جهّز مونتاجاً عمودياً سريعاً لـ TikTok وReels وShorts. أعد تأطير اللقطات المهمة للعمودي، واحذف الفواصل الطويلة، وأضف تكبيرات وانتقالات واضحة وموسيقى إيقاعية ومؤثرات عند القصّات. لا تضف كلاماً أو عناوين فوق الصورة.",
+      "Make a fast vertical TikTok, Reels, and Shorts edit. Reframe the important action for portrait, remove long pauses, use clear zooms and transitions, and add rhythmic music and cut sound effects. Do not overlay words or titles.",
+    ],
+  },
+  {
+    label: ["إعلان منتج", "Product promo"],
+    prompt: [
+      "حرّر الفيديو كإعلان منتج: افتتح بأقوى لقطة، ثم أبرز التفاصيل في لقطات قصيرة مع تكبيرات وانتقالات وتدرج لوني واضح، واختم بأفضل لقطة. أضف موسيقى إعلانية ومؤثرات انتقال. لا تخترع نصوصاً أو ادعاءات غير موجودة في الفيديو.",
+      "Edit this as a product promo: open with the strongest shot, feature details in short cuts with punch-ins, transitions, and a polished grade, then end on the best shot. Add promo music and transition effects. Do not invent claims or overlay text.",
+    ],
+  },
+  {
+    label: ["موسيقى ومؤثرات", "Music and SFX"],
+    prompt: [
+      "احتفظ بأفضل اللقطات واحذف التوقفات فقط، ثم ركّب موسيقى خلفية واضحة ومناسبة مع الحفاظ على الصوت الأصلي في المقدمة. أضف مؤثرات whoosh أو impact مسموعة عند القصّات، وانتقالات بصرية ناعمة وتدرجاً لونياً متوازناً.",
+      "Keep the best shots and remove only the pauses, then mix in a clearly audible mood-matched music bed while keeping the original audio in front. Add audible whoosh or impact cut effects, smooth visual transitions, and balanced color grading.",
+    ],
+  },
+  {
+    label: ["نصوص وعناوين", "On-screen text"],
+    prompt: [
+      "أضف عناوين قصيرة وواضحة فوق الفيديو عند اللقطات المناسبة، باستخدام الكلمات أو الرسائل التي أطلبها فقط. صمّمها كعناوين مونتاج احترافية بظل وخلفية شفافة خفيفة، وتجنب النصوص العامة أو المعلومات غير الموجودة في وصفي. أضف حركة تقريب وانتقالات لونية وموسيقى ومؤثرات صوتية متناسقة.",
+      "Add concise, readable on-screen titles at the right moments using only the words or messages I request. Style them as professional editorial overlays with a subtle translucent backing and shadow; avoid generic filler or claims not in my brief. Add camera push-ins, graded transitions, matching music, and sound effects.",
+    ],
+  },
+] as const;
 
 function dialectLabelAr(value: string) {
   const labels: Record<string, string> = {
@@ -190,7 +235,6 @@ function StudioPage() {
     voiceTone: string;
     imageStyle: string;
     imageUse: string;
-    videoAnalysisConsent: boolean;
     includeMusic: boolean;
     includeEffects: boolean;
     voiceLanguage: string;
@@ -210,7 +254,6 @@ function StudioPage() {
     voiceTone: "warm",
     imageStyle: "cinematic",
     imageUse: "campaign",
-    videoAnalysisConsent: false,
     includeMusic: true,
     includeEffects: true,
     voiceLanguage: "Arabic",
@@ -225,11 +268,20 @@ function StudioPage() {
   const [framesLoading, setFramesLoading] = useState(false);
   const [frameExtractionError, setFrameExtractionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [renderProgress, setRenderProgress] = useState<number | null>(null);
   const [result, setResult] = useState<{
     kind: string;
     output: string;
     mediaUrl: string | null;
+    editSummary?: {
+      clips: Array<{ start: number; end: number }>;
+      sourceDuration: number;
+      outputDuration: number;
+      music: boolean;
+      soundEffects: boolean;
+      textOverlays: number;
+    };
     narrationUrl?: string;
     downloadUrl?: string;
     fileName?: string;
@@ -271,7 +323,6 @@ function StudioPage() {
       | "voiceLanguage"
       | "imageStyle"
       | "imageUse"
-      | "videoAnalysisConsent"
       | "template",
     v: string,
   ) => setOpts((o) => ({ ...o, [k]: v }));
@@ -279,6 +330,17 @@ function StudioPage() {
   const balance = profile?.balance ?? null;
   const creditCost = getStudioCreditCost(id);
   const finalizeEdit = useServerFn(completeAutoVideoEdit);
+
+  function addVideoEditSuggestion(suggestion: (typeof AUTO_VIDEO_EDIT_SUGGESTIONS)[number]) {
+    const text = suggestion.prompt[ar ? 0 : 1];
+    setPrompt((current) =>
+      [current.trim(), text]
+        .filter(Boolean)
+        .join("\n\n")
+        .slice(0, MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS),
+    );
+    setOperationError(null);
+  }
 
   useEffect(() => {
     if (id !== "animation") return;
@@ -457,6 +519,15 @@ function StudioPage() {
   }, [id, mediaFile]);
 
   async function execute() {
+    if (id === "auto_video" && !prompt.trim()) {
+      const message = ar
+        ? "اكتب وصف التعديلات المطلوبة، أو اختر اقتراحاً، قبل تشغيل المونتاج."
+        : "Describe the edits you want, or choose a suggestion, before running the editor.";
+      setOperationError(message);
+      toast.error(message);
+      document.getElementById("auto-video-edit-prompt")?.focus();
+      return;
+    }
     if (!profile || balance === null) {
       toast.error(
         profileLoadError instanceof Error
@@ -478,6 +549,7 @@ function StudioPage() {
       return setPaywall(true);
     }
     setBusy(true);
+    setOperationError(null);
     setResult(null);
     setLocalFallbackFailed(false);
     let uploadedPath: string | null = null;
@@ -595,6 +667,18 @@ function StudioPage() {
           output: plan.title,
           mediaUrl: completed.mediaUrl,
           downloadUrl: completed.downloadUrl,
+          editSummary: {
+            clips: plan.segments.map(({ start, end }) => ({ start, end })),
+            sourceDuration: clipDurationSeconds,
+            outputDuration: plan.segments.reduce(
+              (total, segment, index) =>
+                total + segment.end - segment.start - (opts.includeEffects && index > 0 ? 0.18 : 0),
+              0,
+            ),
+            music: opts.includeMusic,
+            soundEffects: opts.includeEffects,
+            textOverlays: plan.segments.filter(({ textOverlay }) => textOverlay).length,
+          },
         });
         void qc.invalidateQueries({ queryKey: ["profile", user?.id] });
         toast.success(
@@ -633,7 +717,21 @@ function StudioPage() {
         const { error } = await supabase.storage.from("project-vault").remove([uploadedPath]);
         if (error) console.error("Failed to remove an uncommitted studio upload", error);
       }
-      toast.error((e as Error).message);
+      const errorMessage =
+        e instanceof Error
+          ? e.message || e.name
+          : typeof e === "string"
+            ? e
+            : e && typeof e === "object" && "message" in e && typeof e.message === "string"
+              ? e.message
+              : "";
+      const message =
+        errorMessage.trim() ||
+        (ar
+          ? "فشل إنشاء الفيديو أثناء تحميل FFmpeg أو معالجته. أعد المحاولة، وإذا تكرر الخطأ أرسل هذه الرسالة للدعم."
+          : "Video rendering failed while loading or running FFmpeg. Try again; if it repeats, send this message to support.");
+      setOperationError(message);
+      toast.error(message);
     } finally {
       setRenderProgress(null);
       setBusy(false);
@@ -717,9 +815,6 @@ function StudioPage() {
           const selected = e.target.files?.[0] ?? null;
           setFileName(selected?.name ?? "");
           setMediaFile(selected);
-          if (id === "auto_video") {
-            setOpts((current) => ({ ...current, videoAnalysisConsent: false }));
-          }
           setResult(null);
         }}
       />
@@ -830,23 +925,11 @@ function StudioPage() {
                               : "3 still frames are ready. Audio will not be sent."
                             : "")}
                     </p>
-                    <label className="flex cursor-pointer items-start gap-2 text-xs leading-5 text-muted-foreground">
-                      <Checkbox
-                        checked={opts.videoAnalysisConsent}
-                        onCheckedChange={(checked) =>
-                          setOpts((current) => ({
-                            ...current,
-                            videoAnalysisConsent: checked === true,
-                          }))
-                        }
-                        disabled={framesLoading || videoFrames.length !== 3}
-                      />
-                      <span>
-                        {ar
-                          ? "أوافق على إرسال 3 لقطات ثابتة من الفيديو إلى مزوّد الذكاء الاصطناعي لتحليل المشاهد. لن يُرسل ملف الفيديو أو صوته للتحليل."
-                          : "I agree to send 3 still frames to the AI provider for scene analysis. The video file and its audio will not be sent for analysis."}
-                      </span>
-                    </label>
+                    <p className="text-xs leading-5 text-muted-foreground">
+                      {ar
+                        ? "عند الضغط على تشغيل، ستُرسل 3 لقطات ثابتة إلى Google Gemini لتحليل المشاهد. لن يُرسل ملف الفيديو أو صوته إلى مزوّد الذكاء الاصطناعي."
+                        : "When you select Run, 3 still frames are sent to Google Gemini for scene analysis. The video file and its audio are not sent to the AI provider."}
+                    </p>
                   </>
                 )}
                 <div className="flex flex-wrap gap-2">
@@ -876,7 +959,9 @@ function StudioPage() {
                         setOpts((current) => ({ ...current, includeMusic: checked === true }))
                       }
                     />
-                    {ar ? "إضافة موسيقى خلفية مناسبة للأسلوب" : "Add a mood-matched music bed"}
+                    {ar
+                      ? "إضافة موسيقى أصلية مناسبة للمزاج"
+                      : "Add an original mood-matched music bed"}
                   </label>
                   <label className="flex items-center gap-2">
                     <Checkbox
@@ -885,20 +970,72 @@ function StudioPage() {
                         setOpts((current) => ({ ...current, includeEffects: checked === true }))
                       }
                     />
-                    {ar ? "إضافة مؤثرات صوتية مع القصّات" : "Add sound effects at cuts"}
+                    {ar
+                      ? "إضافة انتقالات ومؤثرات صوتية عند القصّات"
+                      : "Add transitions and sound effects at cuts"}
                   </label>
                 </div>
                 <p className="rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3 text-xs leading-6 text-muted-foreground">
                   {ar
-                    ? "سيحلّل الذكاء الاصطناعي 3 لقطات ثابتة وملاحظاتك ليحدد القصّات والعناوين، ثم ينفّذها محلياً في المتصفح ويصدر MP4 جاهزاً. يظل صوتك الأصلي، وتُضاف موسيقى ومؤثرات تركيبية حسب اختيارك. حجم الفيديو الأقصى 50 ميجابايت والمدة 10 دقائق."
-                    : "AI uses 3 still frames and your notes to plan cuts and captions, then renders them locally in your browser to a publish-ready MP4. Original audio is kept; optional synthesized music and sound effects are added. Max 50 MB and 10 minutes."}
+                    ? "يختار Gemini لقطات المونتاج من 3 صور ثابتة ووصفك. ينفّذ المتصفح قصّات وانتقالات وتدرجاً لونياً وحركة تقريب، ويمزج صوت الفيديو مع موسيقى ومؤثرات محلية، ويضيف عنواناً قصيراً مناسباً للصورة ما لم تطلب عدم إضافة نص. اكتب حتى 100,000 حرف. الحد الأقصى للفيديو 50 ميجابايت و10 دقائق."
+                    : "Gemini plans highlights from 3 still frames and your brief. Your browser applies cuts, transitions, color grading, camera motion, and a concise relevant title unless you ask for no text; it also mixes the source audio with locally composed music and sound effects. Up to 100,000 characters; max video size 50 MB and duration 10 minutes."}
                 </p>
+                {videoFrames.length === 3 && (
+                  <div
+                    className="space-y-2"
+                    aria-label={ar ? "اقتراحات المونتاج" : "Edit suggestions"}
+                  >
+                    <p className="text-sm font-medium">
+                      {ar
+                        ? "اختار اقتراحاً لإضافته إلى وصفك:"
+                        : "Choose suggestions to add to your brief:"}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {AUTO_VIDEO_EDIT_SUGGESTIONS.map((suggestion) => (
+                        <Button
+                          key={suggestion.label[0]}
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => addVideoEditSuggestion(suggestion)}
+                        >
+                          {suggestion.label[ar ? 0 : 1]}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <label htmlFor="auto-video-edit-prompt" className="block text-sm font-medium">
+                  {ar
+                    ? "وصف التعديلات المطلوبة (إلزامي)"
+                    : "Describe the edits you want (required)"}
+                  <span className="ms-1 text-destructive" aria-hidden="true">
+                    *
+                  </span>
+                </label>
                 <Textarea
-                  rows={3}
-                  placeholder={ar ? "ملاحظات للمونتير الذكي..." : "Notes for the AI editor..."}
+                  id="auto-video-edit-prompt"
+                  rows={10}
+                  required
+                  aria-required="true"
+                  maxLength={MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS}
+                  className="min-h-[240px] resize-y"
+                  placeholder={
+                    ar
+                      ? "اكتب بالتفصيل ما تريد تنفيذه: اللقطات التي تهمك، الإيقاع، المؤثرات البصرية والصوتية، الموسيقى، الألوان، واللقطات التي تريد حذفها..."
+                      : "Describe the edits in detail: which moments to keep, pacing, visual and sound effects, music, colors, and anything to remove..."
+                  }
                   value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
+                  onChange={(e) => {
+                    setPrompt(e.target.value);
+                    setOperationError(null);
+                  }}
                 />
+                <p className="text-end text-xs text-muted-foreground" aria-live="polite">
+                  {ar
+                    ? `${prompt.length.toLocaleString(lang)} / ${MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS.toLocaleString(lang)} حرف`
+                    : `${prompt.length.toLocaleString(lang)} / ${MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS.toLocaleString(lang)} characters`}
+                </p>
               </>
             )}
             {id === "animation" && (
@@ -1250,7 +1387,7 @@ function StudioPage() {
                   (!mediaFile?.type.startsWith("video/") ||
                     framesLoading ||
                     videoFrames.length !== 3 ||
-                    !opts.videoAnalysisConsent)) ||
+                    !prompt.trim())) ||
                 (!prompt && !fileName && id !== "templates")
               }
               onClick={() => execute()}
@@ -1277,9 +1414,13 @@ function StudioPage() {
                 <span className="text-sm text-muted-foreground">
                   {renderProgress === null
                     ? t("running")
-                    : ar
-                      ? `إخراج الفيديو محلياً… ${renderProgress}%`
-                      : `Rendering locally… ${renderProgress}%`}
+                    : renderProgress === 0
+                      ? ar
+                        ? "جارٍ تحميل محرك الفيديو…"
+                        : "Loading the video engine…"
+                      : ar
+                        ? `إخراج الفيديو محلياً… ${renderProgress}%`
+                        : `Rendering locally… ${renderProgress}%`}
                 </span>
                 {renderProgress !== null && (
                   <div
@@ -1298,9 +1439,19 @@ function StudioPage() {
                 )}
               </div>
             )}
-            {!busy && !result && (
-              <div className="flex h-80 items-center justify-center text-muted-foreground grid-hud rounded-xl">
-                ◇ ◇ ◇
+            {!busy && operationError && (
+              <p
+                role="alert"
+                className="mb-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+              >
+                {operationError}
+              </p>
+            )}
+            {!busy && !result && !operationError && (
+              <div className="grid-hud flex h-80 items-center justify-center rounded-xl text-center text-sm text-muted-foreground">
+                {ar
+                  ? "ستظهر النتيجة هنا بعد تشغيل الأداة."
+                  : "Your result will appear here after you run the studio."}
               </div>
             )}
             {result?.kind === "image" && (
@@ -1318,18 +1469,103 @@ function StudioPage() {
               <div className="space-y-3">
                 <p className="font-semibold text-cyan-100">{result.output}</p>
                 {id === "auto_video" && (
-                  <p className="text-xs text-muted-foreground">
-                    {ar
-                      ? "اكتمل تصدير MP4. راجع الفيديو قبل النشر؛ العناوين والمؤثرات تُولّد آلياً."
-                      : "MP4 export complete. Review before publishing; captions and effects are automatically generated."}
-                  </p>
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      {ar
+                        ? "قارن المصدر بالنسخة المعدّلة أدناه؛ شغّل أي فيديو لسماع الصوت المضمن فوراً."
+                        : "Compare the source with the edited version below. Play either video to hear its embedded audio immediately."}
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <p className="text-sm font-semibold">{ar ? "قبل المونتاج" : "Before"}</p>
+                        <video
+                          controls
+                          playsInline
+                          preload="auto"
+                          src={mediaUrl ?? undefined}
+                          className="max-h-[320px] w-full rounded-xl bg-black"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <p className="text-sm font-semibold text-cyan-100">
+                          {ar ? "بعد المونتاج" : "After"}
+                        </p>
+                        <video
+                          controls
+                          playsInline
+                          preload="auto"
+                          src={result.mediaUrl}
+                          className="max-h-[320px] w-full rounded-xl bg-black"
+                        />
+                      </div>
+                    </div>
+                    {result.editSummary && (
+                      <div className="space-y-2 rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3 text-sm">
+                        <p className="font-semibold">
+                          {ar ? "التعديلات المنفّذة فعلياً" : "Edits applied"}
+                        </p>
+                        <ul className="list-inside list-disc space-y-1 text-muted-foreground">
+                          <li>
+                            {ar
+                              ? `${result.editSummary.clips.length} لقطات محددة من أصل ${result.editSummary.sourceDuration.toFixed(1)} ثانية`
+                              : `${result.editSummary.clips.length} selected clips from ${result.editSummary.sourceDuration.toFixed(1)} seconds`}
+                          </li>
+                          <li>
+                            {ar
+                              ? `المدة بعد المونتاج: ${result.editSummary.outputDuration.toFixed(1)} ثانية`
+                              : `Edited duration: ${result.editSummary.outputDuration.toFixed(1)} seconds`}
+                          </li>
+                          <li>
+                            {ar
+                              ? "تدرج لوني، تحسين حدة الصورة، حركة تقريب وانتقالات تلاشي فعلية بين اللقطات"
+                              : "Color grading, sharpening, animated zooms, and real dissolve transitions between clips"}
+                          </li>
+                          <li>
+                            {result.editSummary.music
+                              ? ar
+                                ? "موسيقى خلفية أصلية مدمجة مع الصوت الأصلي"
+                                : "Original background music mixed with the source audio"
+                              : ar
+                                ? "الموسيقى الخلفية متوقفة"
+                                : "Background music is off"}
+                          </li>
+                          <li>
+                            {result.editSummary.soundEffects
+                              ? ar
+                                ? "مؤثرات صوتية وانتقالات مدمجة عند القصّات"
+                                : "Sound effects and transitions added at the cuts"
+                              : ar
+                                ? "المؤثرات الصوتية متوقفة"
+                                : "Sound effects are off"}
+                          </li>
+                          <li>
+                            {result.editSummary.textOverlays > 0
+                              ? ar
+                                ? `${result.editSummary.textOverlays} عناوين مُصمّمة أُضيفت حسب وصفك`
+                                : `${result.editSummary.textOverlays} designed text overlays added from your brief`
+                              : ar
+                                ? "لم يُضف نص عشوائي فوق الفيديو"
+                                : "No filler text was overlaid"}
+                          </li>
+                          <li>
+                            {ar
+                              ? `نقاط القص: ${result.editSummary.clips.map(({ start, end }) => `${start.toFixed(1)}–${end.toFixed(1)}ث`).join("، ")}`
+                              : `Source cut points: ${result.editSummary.clips.map(({ start, end }) => `${start.toFixed(1)}–${end.toFixed(1)}s`).join(", ")}`}
+                          </li>
+                        </ul>
+                      </div>
+                    )}
+                  </>
                 )}
-                <video
-                  controls
-                  playsInline
-                  src={result.mediaUrl}
-                  className="max-h-[420px] w-full rounded-xl bg-black"
-                />
+                {id !== "auto_video" && (
+                  <video
+                    controls
+                    playsInline
+                    preload="auto"
+                    src={result.mediaUrl}
+                    className="max-h-[420px] w-full rounded-xl bg-black"
+                  />
+                )}
                 <a
                   href={result.downloadUrl ?? result.mediaUrl}
                   download={id === "auto_video" ? "youssefco-edited.mp4" : "youssefco-cinema.mp4"}

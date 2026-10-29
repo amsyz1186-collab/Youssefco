@@ -24,6 +24,18 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
 });
 
+const AUTH_DEVICE_ID_KEY = "youssefco:auth-device-id";
+
+async function getAuthDeviceHash() {
+  let deviceId = localStorage.getItem(AUTH_DEVICE_ID_KEY);
+  if (!deviceId || !/^[0-9a-f-]{36}$/i.test(deviceId)) {
+    deviceId = crypto.randomUUID();
+    localStorage.setItem(AUTH_DEVICE_ID_KEY, deviceId);
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(deviceId));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function AuthPage() {
   const { t, lang } = useLang();
   const ar = lang === "ar";
@@ -47,19 +59,43 @@ function AuthPage() {
   useEffect(() => {
     if (!user) return;
 
-    let acceptedDuringOAuth = false;
-    try {
-      acceptedDuringOAuth = sessionStorage.getItem(TERMS_CONSENT_PENDING_KEY) === TERMS_VERSION;
-      if (acceptedDuringOAuth) sessionStorage.removeItem(TERMS_CONSENT_PENDING_KEY);
-    } catch (error) {
-      console.error("[Auth] Could not read terms consent after OAuth", error);
-    }
+    let active = true;
+    void (async () => {
+      try {
+        const deviceHash = await getAuthDeviceHash();
+        const { data: deviceAllowed, error: deviceError } = await supabase.rpc(
+          "claim_auth_device",
+          {
+            p_device_hash: deviceHash,
+          },
+        );
+        if (deviceError) throw deviceError;
+        if (!deviceAllowed) {
+          await supabase.auth.signOut({ scope: "local" });
+          if (active) {
+            toast.error(
+              ar
+                ? "هذا المتصفح مرتبط بحساب آخر. استخدم الحساب المرتبط به أو متصفحاً منفصلاً."
+                : "This browser is already linked to another account. Use that account or a separate browser.",
+            );
+          }
+          return;
+        }
 
-    if (acceptedDuringOAuth) {
-      void supabase.auth
-        .updateUser({ data: createTermsConsentMetadata() })
-        .then(({ error }) => {
-          if (error) {
+        let acceptedDuringOAuth = false;
+        try {
+          acceptedDuringOAuth = sessionStorage.getItem(TERMS_CONSENT_PENDING_KEY) === TERMS_VERSION;
+        } catch (error) {
+          console.error("[Auth] Could not read terms consent after OAuth", error);
+        }
+        if (acceptedDuringOAuth) {
+          try {
+            const { error } = await supabase.auth.updateUser({
+              data: createTermsConsentMetadata(),
+            });
+            if (error) throw error;
+            sessionStorage.removeItem(TERMS_CONSENT_PENDING_KEY);
+          } catch (error) {
             console.error("[Auth] Could not save terms consent after OAuth", error);
             toast.error(
               ar
@@ -67,17 +103,23 @@ function AuthPage() {
                 : "You are signed in, but your consent could not be saved. Sign in and accept again.",
             );
           }
-        })
-        .catch((error: unknown) => {
-          console.error("[Auth] Could not save terms consent after OAuth", error);
+        }
+        if (active) void navigate({ to: "/dashboard" });
+      } catch (error) {
+        console.error("[Auth] Could not verify this browser for account access", error);
+        await supabase.auth.signOut({ scope: "local" });
+        if (active) {
           toast.error(
             ar
-              ? "تم تسجيل الدخول، لكن تعذر حفظ موافقتك."
-              : "You are signed in, but your consent could not be saved.",
+              ? "تعذر التحقق من هذا المتصفح. تأكد من تطبيق ترحيلات قاعدة البيانات ثم أعد المحاولة."
+              : "Could not verify this browser. Apply the database migrations and try again.",
           );
-        });
-    }
-    void navigate({ to: "/dashboard" });
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
   }, [ar, user, navigate]);
 
   async function submit(e: React.FormEvent) {
@@ -183,8 +225,9 @@ function AuthPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          ...(captchaToken ? { captchaToken } : {}),
+          ...(validTurnstileSiteKey && captchaToken ? { captchaToken } : {}),
           redirectTo: new URL("/auth", window.location.origin).toString(),
+          queryParams: { prompt: "select_account" },
         },
       });
       if (error) {
@@ -213,6 +256,7 @@ function AuthPage() {
             "تُحفظ الملفات والمخرجات في مساحة المشروع الخاصة بحسابك، وتُنشأ روابط عامة فقط عندما تختار نشر موقع. راجع الناتج قبل استخدامه؛ فقد تكون مخرجات الذكاء الاصطناعي غير دقيقة أو غير مناسبة.",
             "لا تخصم أدوات الخطة الأساسية رصيداً. قد تخصم أدوات الباقات المدفوعة النقاط الموضحة قبل التشغيل. طلبات التحويل اليدوي لا تضيف رصيداً حتى يراجعها مسؤول.",
             "قد تعالج استضافة Vercel ومزوّدو تسجيل الدخول والذكاء الاصطناعي بيانات الاتصال اللازمة لتشغيل الخدمة وأمانها. الموافقة هنا تخص شروط التطبيق وإشعار الخصوصية، ولا تستبدل موافقات الإرسال الخاصة بكل أداة.",
+            "لمنع إساءة استخدام الحسابات المجانية، نربط الحساب بمعرّف عشوائي لهذا المتصفح. يمكن استخدام الحساب نفسه على أجهزة أخرى، لكن هذا لا يحدد الجهاز مادياً ويمكن أن يتغير عند مسح بيانات الموقع أو استخدام متصفح جديد.",
           ],
         }
       : lang === "zh"
@@ -226,6 +270,7 @@ function AuthPage() {
               "文件和结果保存在账户的私人项目空间中；仅在你选择发布网站时才会生成公开链接。使用前请检查结果，AI 输出可能不准确或不合适。",
               "基础方案工具不扣除用户积分。付费方案工具会在运行前显示积分费用。人工转账在管理员审核前不会增加余额。",
               "Vercel 托管服务以及登录和 AI 服务提供商可能会处理运行和保护服务所需的连接数据。本同意适用于应用条款和隐私说明，不替代各工具单独要求的发送授权。",
+              "为减少免费账户滥用，我们会将账户与此浏览器的随机安装标识关联。同一账户可在其他设备使用；该标识不是硬件识别，清除站点数据或更换浏览器会生成新的标识。",
             ],
           }
         : {
@@ -238,6 +283,7 @@ function AuthPage() {
               "Files and outputs are saved in your account's private project storage. A public link is created only when you choose to publish a website. Review generated content before use; AI output may be inaccurate or unsuitable.",
               "Basic-plan tools do not deduct user credits. Paid-plan tools show their credit cost before you run them. Manual top-ups do not add credits until reviewed by an administrator.",
               "Vercel hosting and sign-in or AI providers may process connection data needed to operate and protect the service. This consent covers the app terms and privacy notice; it does not replace the separate consent requested by individual tools.",
+              "To deter free-account abuse, we link an account to a random identifier for this browser installation. The same account can be used on other devices; this is not hardware identification and clearing site data or changing browsers creates a new identifier.",
             ],
           };
 
@@ -251,7 +297,7 @@ function AuthPage() {
           variant="outline"
           className="w-full"
           onClick={google}
-          disabled={busy || !termsAccepted}
+          disabled={busy || !termsAccepted || !validTurnstileSiteKey || !captchaToken}
         >
           {busy ? t("running") : t("google")}
         </Button>
@@ -311,8 +357,8 @@ function AuthPage() {
           ) : (
             <p role="alert" className="text-sm text-destructive">
               {ar
-                ? "إنشاء الحساب والمتابعة بحساب جوجل متوقفان حتى تهيئة CAPTCHA. أضف مفتاح Cloudflare Turnstile العام الصحيح إلى VITE_TURNSTILE_SITE_KEY في Vercel، واضبط المفتاح السري المطابق في إعدادات Supabase Auth."
-                : "Sign-up and Google sign-in are disabled until CAPTCHA is configured. Set a valid Cloudflare Turnstile site key in VITE_TURNSTILE_SITE_KEY in Vercel, and configure its matching secret in Supabase Auth."}
+                ? "إنشاء الحساب والمتابعة بحساب جوجل متوقفان حتى تهيئة CAPTCHA. أضف مفتاح Cloudflare Turnstile إلى VITE_TURNSTILE_SITE_KEY في Vercel، واضبط المفتاح السري المطابق في Supabase Auth."
+                : "Sign-up and Google sign-in are disabled until CAPTCHA is configured. Set VITE_TURNSTILE_SITE_KEY in Vercel and its matching secret in Supabase Auth."}
             </p>
           )}
           <Button

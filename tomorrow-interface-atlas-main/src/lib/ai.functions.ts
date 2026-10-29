@@ -5,7 +5,7 @@ import { Buffer } from "node:buffer";
 import type { Database } from "@/integrations/supabase/types";
 import { parseGeneratedAppProject } from "@/lib/app-engine";
 import { getStudioCreditCostForTier, METERED, parseTier, type StudioId } from "@/lib/plans";
-import { parseAutoVideoEditPlan } from "@/lib/auto-video-edit";
+import { MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS, parseAutoVideoEditPlan } from "@/lib/auto-video-edit";
 import { generateSpeech } from "@/lib/edge-tts";
 import { formatGeminiError, shouldRetryWithFallback } from "@/lib/provider-errors";
 import { formatRpcError } from "@/lib/supabase-errors";
@@ -87,7 +87,6 @@ type Input = {
     techStack?: "html" | "react" | "python" | "java" | "cpp" | "kotlin";
     imageStyle?: string;
     imageUse?: string;
-    videoAnalysisConsent?: boolean;
     videoFrames?: VideoFrame[];
   };
 };
@@ -173,12 +172,12 @@ async function generateAutoVideoPlan(
   };
   const mood = moods[options.mood ?? "Mix"] ?? moods["Mix"]!;
   const duration = Number(options.clipDuration);
-  const minSegments = duration < 1.2 ? 1 : 3;
+  const minSegments = duration < 2.2 ? 1 : 3;
   const raw = await streamText(
-    `You are an AI video editor. Reply with only valid JSON in this exact schema: {"title":"short edit title","segments":[{"start":0,"end":3.2,"caption":"short on-screen title","sound":"none|whoosh|pop|impact"}]}. Create ${minSegments}-8 chronological, non-overlapping clips spanning the source video, with source-time start/end in seconds and end at or before ${duration.toFixed(3)} seconds. Leave no gaps; the first start is 0 and the last end is the clip duration. Use coherent cut points, not equal divisions unless appropriate. Choose short captions that match visible scenes or supplied notes. Use the selected ${options.platform ?? "video"} format, with ${mood}. Assign suitable gentle transition accents (whoosh, pop, impact, or none); don't invent dialogue. Analyze the attached representative still frames and editor notes. Still frames do not reveal motion or audio. Never include markdown, commentary, or any fields beyond title and segments.`,
-    `Language for captions: ${language}. Source file: ${fileName || "uploaded video"}. The frame times are ${
+    `You are an experienced short-form video editor. Reply with only valid JSON in this exact schema: {"title":"short edit title","segments":[{"start":0,"end":3.2,"sound":"none|whoosh|pop|impact","textOverlay":"short title"}]}. Use numeric source timestamps between 0 and ${duration.toFixed(3)} seconds. Each kept clip must be at least 0.4 seconds. Create ${minSegments}-6 chronological, non-overlapping highlight clips; do not simply divide the video equally. Make a purposeful montage by omitting pauses, repetitive footage, and low-value intervals; gaps between selected source clips are allowed. Aim to keep roughly 55%-80% of the source when the frames support a tighter edit, but preserve a continuous essential action rather than cutting arbitrarily. Use strong, natural cut points. Add a concise, designed editorial title in ${language} to at least one selected clip, based on the visible subject and the user's intent. Use exact wording supplied by the user when available; do not invent factual claims or add generic filler. Return null for textOverlay only if the user explicitly asks for no on-screen text. Do not add narration. Use the selected ${options.platform ?? "video"} format and ${mood}. At each useful cut choose exactly one sound from "none", "whoosh", "pop", or "impact"; prefer an appropriate transition sound over "none". Analyze the attached representative still frames and editor notes; they do not reveal motion or audio, so do not claim details you cannot see. Never include markdown, commentary, or fields beyond title and segments.`,
+    `Write the edit title in ${language}. Source file: ${fileName || "uploaded video"}. The frame times are ${
       options.videoFrames?.map((frame) => `${frame.timeSeconds}s`).join(", ") || "unknown"
-    }. Editor notes: ${notes || "No notes supplied; base captions on visible scenes and avoid claims that cannot be inferred from still images."}`,
+    }. Editor notes: ${notes || "No notes supplied; create a concise highlight montage from the visible scenes."}`,
     options.videoFrames,
   );
   return JSON.stringify(parseAutoVideoEditPlan(raw, duration));
@@ -251,7 +250,7 @@ export const runStudio = createServerFn({ method: "POST" })
       typeof i.studio !== "string" ||
       !isMeteredStudio(i.studio) ||
       typeof i.prompt !== "string" ||
-      i.prompt.length > 8000 ||
+      i.prompt.length > (i.studio === "auto_video" ? MAX_AUTO_VIDEO_EDIT_PROMPT_CHARS : 8000) ||
       (i.studio === "app_engine" &&
         ((i.options?.projectType !== undefined &&
           !["website", "mobile"].includes(i.options.projectType)) ||
@@ -260,13 +259,15 @@ export const runStudio = createServerFn({ method: "POST" })
     ) {
       throw new Error("Invalid input");
     }
+    if (i.studio === "auto_video" && !i.prompt.trim()) {
+      throw new Error("اكتب وصف التعديلات المطلوبة على الفيديو قبل تشغيل المونتاج.");
+    }
     if (
       i.studio === "auto_video" &&
       (!i.options?.mediaType?.startsWith("video/") ||
         !Number.isSafeInteger(i.options.mediaSize) ||
         i.options.mediaSize! <= 0 ||
         i.options.mediaSize! > MAX_VIDEO_MEDIA_BYTES ||
-        i.options.videoAnalysisConsent !== true ||
         !Array.isArray(i.options.videoFrames) ||
         i.options.videoFrames.length !== 3 ||
         !i.options.videoFrames.every(
@@ -281,7 +282,7 @@ export const runStudio = createServerFn({ method: "POST" })
         ) ||
         i.options.videoFrames.reduce((total, frame) => total + frame.imageData.length, 0) > 700_000)
     ) {
-      throw new Error("ارفع فيديو صالحاً ووافق على تحليل لقطاته لتشغيل استوديو المونتاج.");
+      throw new Error("ارفع فيديو صالحاً وانتظر تجهيز اللقطات الثلاث قبل تشغيل استوديو المونتاج.");
     }
     if (i.studio === "animation" && i.options?.renderVideo === "1" && i.prompt.length > 5000) {
       throw new Error("اختصر وصف المشهد إلى 5000 حرف أو أقل لإنشاء التعليق الصوتي.");

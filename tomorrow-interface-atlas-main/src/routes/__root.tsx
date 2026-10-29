@@ -90,6 +90,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "Youssefco: منصة إبداعية تجمع استوديوهات الذكاء الاصطناعي للمونتاج والأنيميشن والصوت والدبلجة والتطبيقات والصور.",
       },
+      { name: "google-site-verification", content: "jsKpefT8kjpoUTlWBCdHbTc6i1YcTSGq2LqugU10Ais" },
       { name: "google-adsense-account", content: "ca-pub-1395742119124802" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },

@@ -23,6 +23,7 @@ function createSupabaseFetch(supabaseUrl: string, supabaseKey: string): typeof f
   const publicUrl = supabaseUrl.replace(/\/+$/, "");
   const serverUrl = serverSupabaseUrl(publicUrl, supabaseKey);
   return (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const headers = new Headers(
       typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined,
     );
@@ -43,13 +44,15 @@ function createSupabaseFetch(supabaseUrl: string, supabaseKey: string): typeof f
     const requestSignal =
       init?.signal ??
       (typeof Request !== "undefined" && input instanceof Request ? input.signal : undefined);
+    const isAutoVideoUpload =
+      url.includes("/storage/v1/object/project-vault/") &&
+      /\/youssefco-edit-[^/?]+\.mp4(?:[?#]|$)/i.test(url);
     const fetchOptions: RequestInit = {
       ...init,
       headers,
-      signal: requestSignal ?? AbortSignal.timeout(15_000),
+      signal: requestSignal ?? AbortSignal.timeout(isAutoVideoUpload ? 120_000 : 15_000),
     };
     if (serverUrl) {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       if (url.startsWith(`${publicUrl}/`)) {
         const target = serverUrl + url.slice(publicUrl.length);
         const request =

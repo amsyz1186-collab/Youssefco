@@ -33,7 +33,7 @@ For persistent activity history, apply `supabase/migrations/20261024030000_activ
 
 After the activity migration, apply `supabase/migrations/20261025010000_website_feedback.sql` to enable the public website review summary, signed-in customer reviews, and reports in the authenticated admin dashboard. Review text and display names are public; reports are visible only to their author and admins.
 
-Email/password and Google sign-in use the linked Supabase Auth project. The sign-in screen requires explicit acceptance of the terms and privacy notice and records the accepted version and time in the user's auth metadata. Google sign-in requires the Google provider and OAuth client credentials in Supabase Auth. Add `https://youssefco.vercel.app/auth` to Supabase's allowed redirect URLs, and add Supabase's displayed Auth callback URL (typically `https://<project-ref>.supabase.co/auth/v1/callback`) to the Google OAuth client's authorized redirect URIs.
+Email/password and Google sign-in use the linked Supabase Auth project. The sign-in screen requires explicit acceptance of the terms and privacy notice and records the accepted version and time in the user's auth metadata. Google sign-in requires the Google provider and OAuth client credentials in Supabase Auth. Add `https://youssefco.vercel.app/auth` to Supabase's allowed redirect URLs, and add Supabase's displayed Auth callback URL (typically `https://<project-ref>.supabase.co/auth/v1/callback`) to the Google OAuth client's authorized redirect URIs. The Google button requests account selection. `supabase/migrations/20261029100000_one_account_per_browser_install.sql` links each browser installation to its first signed-in account; clearing site data or using another browser creates a new installation identity, so this is an abuse deterrent rather than hardware-level device identification.
 
 Before deploying the current studio code, apply these migrations in order in the Supabase SQL Editor:
 
@@ -45,6 +45,7 @@ Before deploying the current studio code, apply these migrations in order in the
 6. `supabase/migrations/20261027100000_remove_paid_media_providers.sql`
 7. `supabase/migrations/20261027110000_kling_video_quotas.sql`
 8. `supabase/migrations/20261027120000_kling_paid_tier_only.sql`
+9. `supabase/migrations/20261029100000_one_account_per_browser_install.sql`
 
 The studio server uses the `consume_credits(integer)` RPC for paid plans. Basic-plan tools do not deduct user credits; provider free-tier quotas and abuse-prevention limits still apply, so unlimited availability is not guaranteed. Anonymous users cannot generate content.
 

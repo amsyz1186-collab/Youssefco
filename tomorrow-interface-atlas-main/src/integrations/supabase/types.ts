@@ -279,6 +279,10 @@ export type Database = {
         Args: Record<PropertyKey, never>;
         Returns: undefined;
       };
+      claim_auth_device: {
+        Args: { p_device_hash: string };
+        Returns: boolean;
+      };
       log_ui_event: {
         Args: {
           _anonymous_session_id?: string | null;
