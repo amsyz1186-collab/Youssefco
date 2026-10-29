@@ -115,6 +115,7 @@ function RootShell({ children }: { children: ReactNode }) {
   return (
     <html lang="ar" dir="rtl" className="dark">
       <head>
+        <meta name="google-site-verification" content="jsKpefT8kjpoUTlWBCdHbTc6i1YcTSGq2LqugU10Ais" />
         <HeadContent />
       </head>
       <body>
